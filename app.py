@@ -92,10 +92,13 @@ def get_market_trend():
 ###################################################
 
 def generate_quant_score(df, market_trend):
-
+    
     latest = df.iloc[-1]
     score = 0
     explanation = []
+
+    if len(df) < 50:
+    return 0, "VERİ YETERSİZ", ["Yeterli mum verisi yok"]
 
     if latest["SMA50"] > latest["SMA200"]:
         score += 2
@@ -367,6 +370,7 @@ with tab4:
     col1.metric("Portföy Değeri",round(total_value,2))
     col2.metric("Toplam Maliyet",round(total_cost,2))
     col3.metric("Kar/Zarar %",round(pnl_pct,2))
+
 
 
 
