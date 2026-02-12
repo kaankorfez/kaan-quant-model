@@ -9,12 +9,35 @@ st.set_page_config(layout="wide")
 st.title("🚀 Kaan Quant Trading Dashboard")
 
 ###################################################
-# DATA PREP
+# DATA PREP (STABLE VERSION)
 ###################################################
 
 def prepare_data(symbol, period="1y"):
 
-    df = yf.download(symbol, period=period, auto_adjust=True, progress=False)
+    # Symbol güvenlik filtresi
+    if symbol is None:
+        return None
+
+    if isinstance(symbol, (list, tuple, set)):
+        if len(symbol) == 0:
+            return None
+        symbol = list(symbol)[0]
+
+    symbol = str(symbol).strip()
+
+    if symbol == "":
+        return None
+
+    try:
+        df = yf.download(
+            tickers=symbol,
+            period=period,
+            auto_adjust=True,
+            progress=False,
+            threads=False
+        )
+    except:
+        return None
 
     if df is None or df.empty:
         return None
@@ -26,18 +49,13 @@ def prepare_data(symbol, period="1y"):
         return None
 
     df = df.copy()
+    df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+    df.dropna(subset=["Close"], inplace=True)
 
-    close = df["Close"]
-
-    if isinstance(close, pd.DataFrame):
-        close = close.iloc[:, 0]
-
-    close = pd.Series(close.values.flatten(), index=df.index)
-    df["Close"] = close
-
-    # Minimum bar kontrolü (SMA200 için)
     if len(df) < 200:
         return None
+
+    close = df["Close"]
 
     df["SMA50"] = close.rolling(50).mean()
     df["SMA200"] = close.rolling(200).mean()
@@ -65,8 +83,7 @@ def get_market_data():
         "BIST100": "^XU100",
         "USDTRY": "USDTRY=X",
         "EURTRY": "EURTRY=X",
-        "Altın (Ons)": "GC=F",
-        "Gümüş (Ons)": "SI=F",
+        "Altın": "GC=F",
         "Brent": "BZ=F",
         "BTC": "BTC-USD"
     }
@@ -75,7 +92,7 @@ def get_market_data():
 
     for name, ticker in tickers.items():
         try:
-            df = yf.download(ticker, period="5d", progress=False)
+            df = yf.download(ticker, period="5d", progress=False, threads=False)
 
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
@@ -135,14 +152,6 @@ def generate_signal(df, rsi_buy, rsi_sell):
 
 with st.sidebar:
 
-    st.header("📊 Piyasa Özeti")
-
-    market = get_market_data()
-
-    for k, v in market.items():
-        st.metric(k, f"{v[0]:,}", f"{v[1]} %")
-
-    st.divider()
     st.header("Model Profili")
 
     model_profile = st.selectbox(
@@ -158,14 +167,16 @@ with st.sidebar:
         rsi_buy, rsi_sell = 25, 75
 
     period = st.selectbox("Zaman Aralığı", ["6mo","1y","2y","3y"], index=1)
-    risk_mode = st.checkbox("Piyasa Risk Modu Aktif")
 
 
 ###################################################
-# HISSE LISTESI
+# BIST LIST (ÖRNEK - TAM LİSTENİ BURAYA KOY)
 ###################################################
 
-bist_list = [ ... ]  # (Buraya senin uzun listen aynen gelecek, kısaltmadım)
+bist_list = [
+    "THYAO.IS","ASELS.IS","KCHOL.IS","BIMAS.IS",
+    "EREGL.IS","GARAN.IS","AKBNK.IS","TUPRS.IS"
+]
 
 
 ###################################################
@@ -187,17 +198,11 @@ with tab1:
 
     df = prepare_data(stock, period)
 
-    if df is not None:
+    if df is None:
+        st.warning("Veri alınamadı veya yetersiz.")
+    else:
 
         score, decision, trend = generate_signal(df, rsi_buy, rsi_sell)
-
-        if risk_mode:
-            xu100 = prepare_data("^XU100","1y")
-            if xu100 is not None:
-                _, m_decision, _ = generate_signal(xu100, rsi_buy, rsi_sell)
-                if m_decision == "SELL":
-                    decision = "RISK OFF"
-
         latest = df.iloc[-1]
 
         col1,col2,col3 = st.columns(3)
@@ -224,63 +229,51 @@ with tab2:
     df = prepare_data(stock_bt, period)
 
     if df is None:
-        st.warning("Veri alınamadı.")
+        st.warning("Backtest için yeterli veri yok.")
     else:
 
         initial_capital = 100000
         capital = initial_capital
         position = 0
         equity = []
-        equity_index = []
-        trades = []
 
-        for i in range(1, len(df)):
+        for i in range(200, len(df)):
 
             sub = df.iloc[:i+1]
             _, decision, _ = generate_signal(sub, rsi_buy, rsi_sell)
+
             price = df["Close"].iloc[i]
-            date = df.index[i]
 
             if decision == "BUY" and position == 0:
                 position = capital / price
                 capital = 0
-                trades.append((date,"BUY",price))
 
             elif decision == "SELL" and position > 0:
                 capital = position * price
                 position = 0
-                trades.append((date,"SELL",price))
 
             current_value = capital if position==0 else position*price
             equity.append(current_value)
-            equity_index.append(date)
 
         if len(equity) > 0:
 
-            equity_series = pd.Series(equity,index=equity_index)
+            equity_series = pd.Series(equity)
 
             total_return = (equity_series.iloc[-1]-initial_capital)/initial_capital*100
-
-            rolling_max = equity_series.cummax()
-            drawdown = (equity_series-rolling_max)/rolling_max
-            max_drawdown = drawdown.min()*100
+            max_drawdown = ((equity_series/equity_series.cummax())-1).min()*100
 
             col1,col2 = st.columns(2)
             col1.metric("Toplam Getiri %", round(total_return,2))
             col2.metric("Max Drawdown %", round(max_drawdown,2))
 
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=equity_series.index,y=equity_series,name="Equity"))
+            fig.add_trace(go.Scatter(y=equity_series,name="Equity"))
             fig.update_layout(template="plotly_dark")
             st.plotly_chart(fig,use_container_width=True)
 
-            if trades:
-                trade_df = pd.DataFrame(trades,columns=["Tarih","İşlem","Fiyat"])
-                st.dataframe(trade_df)
-
 
 ###################################################
-# SCREENER
+# SCREENER (SINIR YOK)
 ###################################################
 
 with tab3:
@@ -307,8 +300,8 @@ with tab3:
         screener_df = pd.DataFrame(
             results,
             columns=["Hisse","Score","Karar","Trend","RSI"]
-        )
-        screener_df = screener_df.sort_values(by="Score",ascending=False)
+        ).sort_values(by="Score",ascending=False)
+
         st.dataframe(screener_df,use_container_width=True)
     else:
         st.info("Veri bulunamadı.")
@@ -331,13 +324,12 @@ with tab4:
 
     total_value = 0
     total_cost = 0
-    labels = []
-    values = []
 
     for _, row in portfolio.iterrows():
 
         try:
-            df = yf.download(row["Hisse"],period="5d",progress=False)
+            symbol = str(row["Hisse"]).strip()
+            df = yf.download(symbol,period="5d",progress=False,threads=False)
 
             if isinstance(df.columns,pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
@@ -346,27 +338,15 @@ with tab4:
             adet = float(row["Adet"])
             maliyet = float(row["Maliyet"])
 
-            current_val = price*adet
-            cost_val = maliyet*adet
-
-            total_value += current_val
-            total_cost += cost_val
-
-            labels.append(row["Hisse"])
-            values.append(current_val)
+            total_value += price*adet
+            total_cost += maliyet*adet
 
         except:
             continue
 
-    pnl = total_value-total_cost
-    pnl_pct = (pnl/total_cost*100) if total_cost>0 else 0
+    pnl_pct = ((total_value-total_cost)/total_cost*100) if total_cost>0 else 0
 
     col1,col2,col3 = st.columns(3)
     col1.metric("Portföy Değeri",round(total_value,2))
     col2.metric("Toplam Maliyet",round(total_cost,2))
-    col3.metric("Toplam Kar/Zarar %",round(pnl_pct,2))
-
-    if values:
-        fig = go.Figure(data=[go.Pie(labels=labels,values=values,hole=0.4)])
-        fig.update_layout(template="plotly_dark")
-        st.plotly_chart(fig,use_container_width=True)
+    col3.metric("Kar/Zarar %",round(pnl_pct,2))
