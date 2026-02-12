@@ -19,11 +19,9 @@ def prepare_data(stock, period="2y"):
     if df is None or df.empty or len(df) < 220:
         return None
 
-    # MultiIndex fix
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    # Ensure Close is Series
     if "Close" not in df.columns:
         return None
 
@@ -94,7 +92,6 @@ def generate_signal(df, rsi_buy, rsi_sell):
 
     latest = df.iloc[-1]
     score = 0
-
     trend = "Downtrend"
 
     if latest["SMA50"] > latest["SMA200"]:
@@ -136,9 +133,19 @@ with st.sidebar:
         price = f"{v['price']:,}"
         change = f"{v['change']} %"
 
-        st.metric(label=k, value=price, delta=change)
-        delta_color="inverse" if k in ["USDTRY","EURTRY"] else "normal"
+        delta_color = "inverse" if k in ["USDTRY", "EURTRY"] else "normal"
 
+        st.metric(label=k, value=price, delta=change, delta_color=delta_color)
+
+    st.divider()
+    st.header("Model Parametreleri")
+
+    rsi_buy = st.slider("RSI Al Eşiği", 10, 50, 30)
+    rsi_sell = st.slider("RSI Sat Eşiği", 50, 90, 70)
+
+    period = st.selectbox("Zaman Aralığı", ["6mo", "1y", "2y", "3y"], index=1)
+
+    risk_mode = st.checkbox("Piyasa Risk Modu Aktif")
 
 ############################################
 # TABS
@@ -175,16 +182,16 @@ with tab1:
 
             latest = df.iloc[-1]
 
-            col1,col2,col3 = st.columns(3)
+            col1, col2, col3 = st.columns(3)
             col1.metric("Karar", decision)
             col2.metric("Trend", trend)
-            col3.metric("RSI", round(latest["RSI"],2))
+            col3.metric("RSI", round(float(latest["RSI"]), 2))
 
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=df.index, y=df["Close"], name="Fiyat"))
             fig.add_trace(go.Scatter(x=df.index, y=df["SMA50"], name="SMA50"))
             fig.add_trace(go.Scatter(x=df.index, y=df["SMA200"], name="SMA200"))
-            fig.update_layout(template="plotly_dark")
+            fig.update_layout(template="plotly_dark", title="Fiyat ve Trend Ortalamaları")
             st.plotly_chart(fig, use_container_width=True)
 
 ############################################
@@ -222,16 +229,16 @@ with tab2:
                 current = capital if position == 0 else position * price
                 equity.append(current)
 
-            equity_series = pd.Series(equity)
+            if equity:
+                equity_series = pd.Series(equity)
+                total_return = (equity_series.iloc[-1] - 100000) / 100000 * 100
 
-            total_return = (equity_series.iloc[-1] - 100000) / 100000 * 100
+                st.metric("Toplam Getiri %", round(total_return, 2))
 
-            st.metric("Toplam Getiri %", round(total_return,2))
-
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(y=equity_series, name="Equity"))
-            fig.update_layout(template="plotly_dark")
-            st.plotly_chart(fig, use_container_width=True)
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(y=equity_series, name="Equity"))
+                fig.update_layout(template="plotly_dark", title="Equity Curve")
+                st.plotly_chart(fig, use_container_width=True)
 
 ############################################
 # PORTFÖY
@@ -256,31 +263,36 @@ with tab4:
     labels = []
     values = []
 
-    for i,row in portfolio.iterrows():
+    for _, row in portfolio.iterrows():
         try:
             df = yf.download(row["Hisse"], period="5d", progress=False)
-            price = df["Close"].iloc[-1]
-            val = price * row["Adet"]
+
+            if df is None or df.empty:
+                continue
+
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+
+            price = float(df["Close"].iloc[-1])
+            val = price * float(row["Adet"])
+
             total_value += val
             labels.append(row["Hisse"])
             values.append(val)
+
         except:
             continue
 
-    st.metric("Güncel Portföy Değeri", round(total_value,2))
+    st.metric("Güncel Portföy Değeri", round(total_value, 2))
 
-    # Pie Chart
-    fig = go.Figure(data=[go.Pie(labels=labels, values=values)])
-    fig.update_layout(template="plotly_dark", title="Portföy Dağılımı")
-    st.plotly_chart(fig, use_container_width=True)
+    if values:
+        fig = go.Figure(data=[go.Pie(labels=labels, values=values)])
+        fig.update_layout(template="plotly_dark", title="Portföy Dağılımı")
+        st.plotly_chart(fig, use_container_width=True)
 
-    # Growth Chart
-    growth = pd.Series(
-        np.linspace(initial_value, total_value, 100)
-    )
+    growth = pd.Series(np.linspace(initial_value, total_value, 100))
 
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(y=growth, name="Portföy Büyüme"))
     fig2.update_layout(template="plotly_dark", title="Portföy Büyüme Grafiği")
     st.plotly_chart(fig2, use_container_width=True)
-
