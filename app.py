@@ -6,79 +6,62 @@ import ta
 import plotly.graph_objects as go
 
 st.set_page_config(layout="wide")
-st.title("📈 Kaan Quant Model")
+st.title("🚀 Kaan Quant Dashboard")
 
-###########################################
-# SETTINGS
-###########################################
+############################
+# SIDEBAR
+############################
 
 with st.sidebar:
     st.header("Model Ayarları")
+
     rsi_buy = st.slider("RSI Al", 10, 50, 30)
     rsi_sell = st.slider("RSI Sat", 50, 90, 70)
     risk_ratio = st.slider("Risk/Ödül", 1.0, 4.0, 2.0)
 
-###########################################
-# DATA PREP (SAFE VERSION)
-###########################################
+############################
+# DATA
+############################
 
-def prepare_data(stock, period="1y"):
+def prepare_data(stock, period="2y"):
+    df = yf.download(stock, period=period, auto_adjust=True, progress=False)
 
-    try:
-        df = yf.download(stock, period=period, auto_adjust=True, progress=False)
-    except:
+    if df is None or df.empty or len(df) < 250:
         return None
-
-    if df is None or df.empty:
-        return None
-
-    df = df.copy()
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    required_cols = ['Open','High','Low','Close','Volume']
-    if not all(col in df.columns for col in required_cols):
-        return None
-
-    if len(df) < 250:  # SMA200 için minimum veri
-        return None
-
     df['SMA50'] = df['Close'].rolling(50).mean()
     df['SMA200'] = df['Close'].rolling(200).mean()
-    df['RSI'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
+    df['RSI'] = ta.momentum.RSIIndicator(df['Close'], 14).rsi()
 
     macd = ta.trend.MACD(df['Close'])
     df['MACD'] = macd.macd()
     df['MACD_signal'] = macd.macd_signal()
 
+    df['ATR'] = ta.volatility.AverageTrueRange(
+        df['High'], df['Low'], df['Close']
+    ).average_true_range()
+
     df = df.dropna()
 
-    if df.empty:
-        return None
+    return df if not df.empty else None
 
-    return df
-
-###########################################
-# SIGNAL SAFE
-###########################################
+############################
+# SIGNAL
+############################
 
 def generate_signal(df):
-
-    if df is None or df.empty:
-        return None, None
-
     latest = df.iloc[-1]
     score = 0
 
     if latest['SMA50'] > latest['SMA200']:
         score += 1
-
     if latest['RSI'] < rsi_buy:
         score += 1
     if latest['RSI'] > rsi_sell:
         score -= 1
-
     if latest['MACD'] > latest['MACD_signal']:
         score += 1
     else:
@@ -93,86 +76,69 @@ def generate_signal(df):
 
     return score, decision
 
-###########################################
-# RISK SAFE
-###########################################
-
-def calculate_risk(df):
-
-    if df is None or df.empty:
-        return None, None, None, None
-
-    latest = df.iloc[-1]
-    price = latest['Close']
-
-    atr_indicator = ta.volatility.AverageTrueRange(
-        df['High'], df['Low'], df['Close']
-    )
-
-    atr = atr_indicator.average_true_range().iloc[-1]
-
-    stop = price - atr
-    target = price + (price - stop) * risk_ratio
-
-    rr = (target - price) / (price - stop)
-
-    return round(price,2), round(stop,2), round(target,2), round(rr,2)
-
-###########################################
-# BACKTEST SAFE
-###########################################
+############################
+# ADVANCED BACKTEST
+############################
 
 def backtest(df):
 
-    if df is None or len(df) < 250:
-        return None
-
     capital = 100000
     position = 0
+    equity_curve = []
+    trades = []
 
     for i in range(200, len(df)):
 
-        sub_df = df.iloc[:i+1]
-        score, decision = generate_signal(sub_df)
-
-        if decision is None:
-            continue
-
+        sub = df.iloc[:i+1]
+        score, decision = generate_signal(sub)
         price = df['Close'].iloc[i]
 
         if decision == "BUY" and position == 0:
             position = capital / price
+            entry_price = price
             capital = 0
 
-        if decision == "SELL" and position > 0:
+        elif decision == "SELL" and position > 0:
             capital = position * price
+            trades.append((price-entry_price)/entry_price)
             position = 0
 
-    if position > 0:
-        capital = position * df['Close'].iloc[-1]
+        current_equity = capital if position == 0 else position * price
+        equity_curve.append(current_equity)
 
-    return round(((capital-100000)/100000)*100,2)
+    equity_series = pd.Series(equity_curve)
 
-###########################################
-# SIMPLE STABLE BIST LIST
-###########################################
+    total_return = (equity_series.iloc[-1] - 100000) / 100000 * 100
+    drawdown = (equity_series / equity_series.cummax() - 1).min() * 100
+    win_rate = (np.array(trades) > 0).mean() * 100 if trades else 0
+    sharpe = equity_series.pct_change().mean() / equity_series.pct_change().std() * np.sqrt(252)
+
+    return {
+        "return": round(total_return,2),
+        "max_dd": round(drawdown,2),
+        "win_rate": round(win_rate,2),
+        "trades": len(trades),
+        "sharpe": round(sharpe,2),
+        "equity": equity_series
+    }
+
+############################
+# SCREENER (IMPROVED)
+############################
 
 def get_bist_list():
-    return [
-        "THYAO.IS","ASELS.IS","GARAN.IS","ISCTR.IS","AKBNK.IS",
-        "KCHOL.IS","SAHOL.IS","BIMAS.IS","EREGL.IS","TUPRS.IS",
-        "YKBNK.IS","SISE.IS","PETKM.IS","PGSUS.IS","SASA.IS"
-    ]
+    return ["THYAO.IS","ASELS.IS","GARAN.IS","BIMAS.IS","EREGL.IS",
+            "TUPRS.IS","SAHOL.IS","KCHOL.IS","AKBNK.IS","ISCTR.IS"]
 
-###########################################
+############################
 # TABS
-###########################################
+############################
 
-tab1, tab2, tab3 = st.tabs(["Analiz", "Backtest", "Screener"])
+tab1, tab2, tab3 = st.tabs(["📊 Analiz", "📈 Backtest", "🔎 Screener"])
 
-###########################################
-# TAB 1
-###########################################
+############################
+# ANALYSIS TAB
+############################
 
 with tab1:
     stock = st.text_input("Hisse Kodu (örn: THYAO.IS)")
@@ -181,63 +147,70 @@ with tab1:
         df = prepare_data(stock)
 
         if df is None:
-            st.warning("Yeterli veri yok veya sembol hatalı.")
+            st.warning("Yeterli veri yok.")
         else:
             score, decision = generate_signal(df)
-            price, stop, target, rr = calculate_risk(df)
+            latest = df.iloc[-1]
 
             col1, col2, col3 = st.columns(3)
             col1.metric("Karar", decision)
             col2.metric("Skor", score)
-            col3.metric("Risk/Ödül", f"1:{rr}")
+            col3.metric("RSI", round(latest['RSI'],2))
 
-            st.write("Fiyat:", price)
-            st.write("Stop:", stop)
-            st.write("Hedef:", target)
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name="Close"))
+            fig.add_trace(go.Scatter(x=df.index, y=df['SMA50'], name="SMA50"))
+            fig.add_trace(go.Scatter(x=df.index, y=df['SMA200'], name="SMA200"))
+            fig.update_layout(template="plotly_dark")
+            st.plotly_chart(fig, use_container_width=True)
 
-###########################################
-# TAB 2
-###########################################
+############################
+# BACKTEST TAB
+############################
 
 with tab2:
     stock_bt = st.text_input("Backtest Hisse", key="bt")
 
     if stock_bt:
-        df = prepare_data(stock_bt, period="3y")
-        result = backtest(df)
+        df = prepare_data(stock_bt, "3y")
 
-        if result is None:
-            st.warning("Backtest için yeterli veri yok.")
-        else:
-            st.metric("Toplam Getiri %", result)
+        if df is not None:
+            results = backtest(df)
 
-###########################################
-# TAB 3
-###########################################
+            col1,col2,col3,col4,col5 = st.columns(5)
+            col1.metric("Toplam Getiri %", results["return"])
+            col2.metric("Max Drawdown %", results["max_dd"])
+            col3.metric("Win Rate %", results["win_rate"])
+            col4.metric("İşlem Sayısı", results["trades"])
+            col5.metric("Sharpe", results["sharpe"])
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(y=results["equity"], name="Equity Curve"))
+            fig.update_layout(template="plotly_dark")
+            st.plotly_chart(fig, use_container_width=True)
+
+############################
+# SCREENER TAB
+############################
 
 with tab3:
-    symbols = get_bist_list()
+    st.write("Trend + Momentum Filtresi")
 
-    buy_list = []
-    sell_list = []
+    symbols = get_bist_list()
+    strong = []
 
     for symbol in symbols:
-        df = prepare_data(symbol, period="1y")
+        df = prepare_data(symbol, "1y")
         if df is None:
             continue
 
         score, decision = generate_signal(df)
+        latest = df.iloc[-1]
 
-        if decision == "BUY":
-            buy_list.append(symbol)
+        if decision == "BUY" and latest['Volume'] > df['Volume'].mean():
+            strong.append((symbol, score))
 
-        if decision == "SELL":
-            sell_list.append(symbol)
+    strong = sorted(strong, key=lambda x: x[1], reverse=True)
 
-    col1, col2 = st.columns(2)
-
-    col1.subheader("BUY")
-    col1.write(buy_list)
-
-    col2.subheader("SELL")
-    col2.write(sell_list)
+    for s in strong:
+        st.write(f"{s[0]} | Skor: {s[1]}")
