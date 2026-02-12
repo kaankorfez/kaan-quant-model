@@ -97,14 +97,14 @@ def generate_quant_score(df, market_trend):
     score = 0
     explanation = []
 
-   if len(df) >= 20:
-    if latest["Close"] > df["Close"].iloc[-20]:
+    if len(df) >= 20:
+        if latest["Close"] > df["Close"].iloc[-20]:
         score += 1
         explanation.append("20 günlük yükseliş trendi")
-    else:
+        else:
         explanation.append("20 günlük düşüş trendi")
-else:
-    explanation.append("Trend için yeterli veri yok")
+    else:
+        explanation.append("Trend için yeterli veri yok")
 
     if latest["SMA50"] > latest["SMA200"]:
         score += 2
@@ -376,6 +376,7 @@ with tab4:
     col1.metric("Portföy Değeri",round(total_value,2))
     col2.metric("Toplam Maliyet",round(total_cost,2))
     col3.metric("Kar/Zarar %",round(pnl_pct,2))
+
 
 
 
