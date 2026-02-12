@@ -62,15 +62,29 @@ def prepare_data(symbol, period="1y"):
 
 def get_market_trend():
 
-    df = yf.download("^XU100", period="1y", progress=False)
+    try:
+        df = yf.download("^XU100", period="2y", progress=False)
+    except:
+        return "UNKNOWN"
+
+    if df is None or df.empty or len(df) < 200:
+        return "UNKNOWN"
+
+    df = df.copy()
 
     df["SMA50"] = df["Close"].rolling(50).mean()
     df["SMA200"] = df["Close"].rolling(200).mean()
+
+    df.dropna(inplace=True)
+
+    if df.empty:
+        return "UNKNOWN"
 
     if df["SMA50"].iloc[-1] > df["SMA200"].iloc[-1]:
         return "UP"
     else:
         return "DOWN"
+
 
 
 ###################################################
@@ -112,8 +126,12 @@ def generate_quant_score(df, market_trend):
         explanation.append("52W high'a yakın")
 
     if market_trend == "UP":
-        score += 1
-        explanation.append("Piyasa yönü destekliyor")
+    score += 1
+    explanation.append("Piyasa yönü destekliyor")
+elif market_trend == "DOWN":
+    explanation.append("Piyasa aşağı yönlü")
+else:
+    explanation.append("Piyasa trendi alınamadı")
 
     if score >= 8:
         decision = "STRONG BUY"
@@ -349,3 +367,4 @@ with tab4:
     col1.metric("Portföy Değeri",round(total_value,2))
     col2.metric("Toplam Maliyet",round(total_cost,2))
     col3.metric("Kar/Zarar %",round(pnl_pct,2))
+
