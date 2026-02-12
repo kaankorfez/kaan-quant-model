@@ -8,7 +8,16 @@ st.title("Kaan Quant Dashboard")
 
 ticker = st.text_input("Hisse Kodu (örn: THYAO.IS)")
 
+# ----------------------------
+# SCORE HESAPLAMA
+# ----------------------------
 def calculate_score(df):
+
+    if len(df) < 200:
+        return 0
+
+    df = df.copy()
+
     df['SMA50'] = df['Close'].rolling(50).mean()
     df['SMA200'] = df['Close'].rolling(200).mean()
 
@@ -50,6 +59,10 @@ def calculate_score(df):
 
     return score
 
+
+# ----------------------------
+# KARAR MOTORU
+# ----------------------------
 def decision_from_score(score):
     if score >= 5:
         return "STRONG BUY"
@@ -64,8 +77,21 @@ def decision_from_score(score):
     else:
         return "NEUTRAL"
 
+
+# ----------------------------
+# RİSK HESABI
+# ----------------------------
 def calculate_risk(df):
-    atr = ta.volatility.AverageTrueRange(df['High'], df['Low'], df['Close'], window=14)
+
+    df = df.copy()
+
+    atr = ta.volatility.AverageTrueRange(
+        high=df['High'],
+        low=df['Low'],
+        close=df['Close'],
+        window=14
+    )
+
     df['ATR'] = atr.average_true_range()
 
     price = df['Close'].iloc[-1]
@@ -77,34 +103,57 @@ def calculate_risk(df):
 
     return price, stop, target
 
+
+# ----------------------------
+# ANA ÇALIŞMA BLOĞU
+# ----------------------------
 if ticker:
-    df = yf.download(ticker, period="5y", interval="1d")
 
-    score = calculate_score(df)
-    decision = decision_from_score(score)
-    price, stop, target = calculate_risk(df)
+    try:
+        df = yf.download(ticker, period="5y", interval="1d")
 
-    st.subheader(f"Skor: {score}")
-    st.subheader(f"Karar: {decision}")
+        if df.empty:
+            st.error("Veri bulunamadı.")
+            st.stop()
 
-    st.write(f"Güncel Fiyat: {round(price,2)}")
-    st.write(f"Stop Loss: {round(stop,2)}")
-    st.write(f"Hedef: {round(target,2)}")
-    st.write("Risk/Ödül: 1:2")
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
 
-    # Basit Backtest
-    df['Signal'] = 0
-    for i in range(200, len(df)):
-        temp = df.iloc[:i]
-        sc = calculate_score(temp)
-        if sc >= 3:
-            df.loc[df.index[i], 'Signal'] = 1
-        elif sc <= -2:
-            df.loc[df.index[i], 'Signal'] = -1
+        df = df.dropna()
 
-    df['Return'] = df['Close'].pct_change()
-    df['Strategy'] = df['Return'] * df['Signal'].shift(1)
+        score = calculate_score(df)
+        decision = decision_from_score(score)
+        price, stop, target = calculate_risk(df)
 
-    total_return = (df['Strategy'].fillna(0) + 1).prod() - 1
+        st.subheader(f"Skor: {score}")
+        st.subheader(f"Karar: {decision}")
 
-    st.subheader(f"Backtest Toplam Getiri: %{round(total_return*100,2)}")
+        st.write(f"Güncel Fiyat: {round(price,2)}")
+        st.write(f"Stop Loss: {round(stop,2)}")
+        st.write(f"Hedef: {round(target,2)}")
+        st.write("Risk/Ödül: 1:2")
+
+        # ----------------------------
+        # BASİT BACKTEST
+        # ----------------------------
+        df['Signal'] = 0
+
+        for i in range(200, len(df)):
+            temp = df.iloc[:i]
+            sc = calculate_score(temp)
+
+            if sc >= 3:
+                df.loc[df.index[i], 'Signal'] = 1
+            elif sc <= -2:
+                df.loc[df.index[i], 'Signal'] = -1
+
+        df['Return'] = df['Close'].pct_change()
+        df['Strategy'] = df['Return'] * df['Signal'].shift(1)
+
+        total_return = (df['Strategy'].fillna(0) + 1).prod() - 1
+
+        st.subheader(f"Backtest Toplam Getiri: %{round(total_return*100,2)}")
+
+    except Exception as e:
+        st.error("Bir hata oluştu.")
+        st.write(e)
