@@ -9,7 +9,7 @@ st.set_page_config(layout="wide")
 st.title("🚀 Kaan Quant Trading Dashboard")
 
 ###################################################
-# DATA PREP (STABLE VERSION)
+# DATA PREP (ADVANCED QUANT VERSION)
 ###################################################
 
 def prepare_data(symbol, period="1y"):
@@ -17,159 +17,163 @@ def prepare_data(symbol, period="1y"):
     if not symbol:
         return None
 
-    # Liste gelirse ilk elemanı al
-    if isinstance(symbol, (list, tuple, set)):
-        if len(symbol) == 0:
-            return None
-        symbol = list(symbol)[0]
-
     symbol = str(symbol).strip()
-
-    if symbol == "":
-        return None
 
     try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, auto_adjust=True)
-    except Exception:
+    except:
         return None
 
-    if df is None or df.empty:
-        return None
-
-    if "Close" not in df.columns:
+    if df is None or len(df) < 252:
         return None
 
     df = df.copy()
-    df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
-    df.dropna(subset=["Close"], inplace=True)
 
-    # SMA200 için minimum bar
-    if len(df) < 200:
-        return None
+    df["SMA50"] = df["Close"].rolling(50).mean()
+    df["SMA200"] = df["Close"].rolling(200).mean()
 
-    close = df["Close"]
+    df["RSI"] = ta.momentum.RSIIndicator(df["Close"]).rsi()
 
-    df["SMA50"] = close.rolling(50).mean()
-    df["SMA200"] = close.rolling(200).mean()
-    df["RSI"] = ta.momentum.RSIIndicator(close).rsi()
-
-    macd = ta.trend.MACD(close)
+    macd = ta.trend.MACD(df["Close"])
     df["MACD"] = macd.macd()
     df["MACD_signal"] = macd.macd_signal()
 
-    df.dropna(inplace=True)
+    df["ATR"] = ta.volatility.AverageTrueRange(
+        df["High"], df["Low"], df["Close"]
+    ).average_true_range()
 
-    if len(df) < 50:
-        return None
+    df["Volume_MA"] = df["Volume"].rolling(20).mean()
+
+    df["Volatility"] = df["Close"].pct_change().rolling(20).std() * np.sqrt(252)
+
+    df["52W_High"] = df["Close"].rolling(252).max()
+
+    df["Donchian_Low"] = df["Low"].rolling(20).min()
+
+    df.dropna(inplace=True)
 
     return df
 
 
-
 ###################################################
-# MARKET PANEL
+# MARKET TREND (BIST100 CONFIRMATION)
 ###################################################
 
-def get_market_data():
+def get_market_trend():
 
-    tickers = {
-        "BIST100": "^XU100",
-        "USDTRY": "USDTRY=X",
-        "EURTRY": "EURTRY=X",
-        "Altın": "GC=F",
-        "Brent": "BZ=F",
-        "BTC": "BTC-USD"
-    }
+    df = yf.download("^XU100", period="1y", progress=False)
 
-    results = {}
+    df["SMA50"] = df["Close"].rolling(50).mean()
+    df["SMA200"] = df["Close"].rolling(200).mean()
 
-    for name, ticker in tickers.items():
-        try:
-            df = yf.download(ticker, period="5d", progress=False, threads=False)
-
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-
-            if len(df) < 2:
-                continue
-
-            last = float(df["Close"].iloc[-1])
-            prev = float(df["Close"].iloc[-2])
-            change = ((last - prev) / prev) * 100
-
-            results[name] = (round(last,2), round(change,2))
-        except:
-            continue
-
-    return results
+    if df["SMA50"].iloc[-1] > df["SMA200"].iloc[-1]:
+        return "UP"
+    else:
+        return "DOWN"
 
 
 ###################################################
-# SIGNAL ENGINE
+# 10 POINT QUANT SCORING ENGINE
 ###################################################
 
-def generate_signal(df, rsi_buy, rsi_sell):
+def generate_quant_score(df, market_trend):
 
     latest = df.iloc[-1]
     score = 0
-    trend = "Downtrend"
+    explanation = []
 
     if latest["SMA50"] > latest["SMA200"]:
-        score += 1
-        trend = "Uptrend"
+        score += 2
+        explanation.append("Trend yukarı (SMA50 > SMA200)")
 
-    if latest["RSI"] < rsi_buy:
-        score += 1
+    if latest["Close"] > df["Close"].iloc[-20]:
+        score += 2
+        explanation.append("20 günlük momentum pozitif")
 
-    if latest["RSI"] > rsi_sell:
-        score -= 1
+    if 40 < latest["RSI"] < 70:
+        score += 1
+        explanation.append("RSI sağlıklı bölgede")
 
     if latest["MACD"] > latest["MACD_signal"]:
         score += 1
-    else:
-        score -= 1
+        explanation.append("MACD pozitif")
 
-    if score >= 2:
+    if latest["Volume"] > latest["Volume_MA"]:
+        score += 1
+        explanation.append("Hacim ortalamanın üstünde")
+
+    if latest["Volatility"] < 0.50:
+        score += 1
+        explanation.append("Volatilite kontrol altında")
+
+    if latest["Close"] > 0.85 * latest["52W_High"]:
+        score += 1
+        explanation.append("52W high'a yakın")
+
+    if market_trend == "UP":
+        score += 1
+        explanation.append("Piyasa yönü destekliyor")
+
+    if score >= 8:
+        decision = "STRONG BUY"
+    elif score >= 6:
         decision = "BUY"
-    elif score <= -1:
+    elif score >= 4:
+        decision = "HOLD"
+    elif score >= 2:
         decision = "SELL"
     else:
-        decision = "WATCH"
+        decision = "STRONG SELL"
 
-    return score, decision, trend
+    return score, decision, explanation
 
 
 ###################################################
-# SIDEBAR
+# ATR RISK MODEL
 ###################################################
 
-with st.sidebar:
+def risk_model(df):
 
-    st.header("Model Profili")
+    latest = df.iloc[-1]
+    atr = latest["ATR"]
+    entry = latest["Close"]
 
-    model_profile = st.selectbox(
-        "Profil Seç",
-        ["Conservative","Balanced","Aggressive"]
+    stop_loss = entry - (2 * atr)
+    highest_close = df["Close"].rolling(20).max().iloc[-1]
+    trailing_stop = highest_close - (2 * atr)
+    support_level = min(
+        df["Low"].rolling(20).min().iloc[-1],
+        latest["Donchian_Low"]
     )
 
-    if model_profile == "Conservative":
-        rsi_buy, rsi_sell = 35, 65
-    elif model_profile == "Balanced":
-        rsi_buy, rsi_sell = 30, 70
-    else:
-        rsi_buy, rsi_sell = 25, 75
+    risk_pct = ((entry - stop_loss) / entry) * 100
 
-    period = st.selectbox("Zaman Aralığı", ["6mo","1y","2y","3y"], index=1)
+    if risk_pct < 3:
+        risk_score = "LOW RISK"
+    elif risk_pct < 6:
+        risk_score = "MEDIUM RISK"
+    else:
+        risk_score = "HIGH RISK"
+
+    return stop_loss, trailing_stop, support_level, risk_score
 
 
 ###################################################
-# BIST LIST (ÖRNEK - TAM LİSTENİ BURAYA KOY)
+# BIST LIST
 ###################################################
 
 bist_list = [
-    "THYAO.IS","ASELS.IS","KCHOL.IS","BIMAS.IS",
-    "EREGL.IS","GARAN.IS","AKBNK.IS","TUPRS.IS"
+"AEFES.IS","AGHOL.IS","AKBNK.IS","AKSA.IS","AKSEN.IS","ALARK.IS","ALTNY.IS","ANSGR.IS","ARCLK.IS","ASELS.IS",
+"ASTOR.IS","BALSU.IS","BIMAS.IS","BRSAN.IS","BRYAT.IS","BSOKE.IS","BTCIM.IS","CANTE.IS","CCOLA.IS","CIMSA.IS",
+"CWENE.IS","DAPGM.IS","DOAS.IS","DOHOL.IS","DSTKF.IS","ECILC.IS","EFOR.IS","EGEEN.IS","EKGYO.IS","ENERY.IS",
+"ENJSA.IS","ENKAI.IS","EREGL.IS","EUPWR.IS","FENER.IS","FROTO.IS","GARAN.IS","GENIL.IS","GESAN.IS","GLRMK.IS",
+"GRSEL.IS","GRTHO.IS","GSRAY.IS","GUBRF.IS","HALKB.IS","HEKTS.IS","ISCTR.IS","ISMEN.IS","IZENR.IS","KCAER.IS",
+"KCHOL.IS","KLRHO.IS","KONTR.IS","KRDMD.IS","KTLEV.IS","KUYAS.IS","MAGEN.IS","MAVI.IS","MGROS.IS","MIATK.IS",
+"MPARK.IS","OBAMS.IS","ODAS.IS","OTKAR.IS","OYAKC.IS","PASEU.IS","PATEK.IS","PETKM.IS","PGSUS.IS","QUAGR.IS",
+"RALYH.IS","REEDR.IS","SAHOL.IS","SASA.IS","SISE.IS","SKBNK.IS","SOKM.IS","TABGD.IS","TAVHL.IS","TCELL.IS",
+"THYAO.IS","TKFEN.IS","TOASO.IS","TRALT.IS","TRENJ.IS","TRMET.IS","TSKB.IS","TSPOR.IS","TTKOM.IS","TTRAK.IS",
+"TUKAS.IS","TUPRS.IS","TUREX.IS","TURSG.IS","ULKER.IS","VAKBN.IS","VESTL.IS","YEOTK.IS","YKBNK.IS","ZOREN.IS"
 ]
 
 
@@ -183,26 +187,40 @@ tab1, tab2, tab3, tab4 = st.tabs(
 
 
 ###################################################
-# ANALIZ
+# ANALIZ TAB
 ###################################################
 
 with tab1:
 
     stock = st.selectbox("Hisse Seç", bist_list)
 
-    df = prepare_data(stock, period)
+    df = prepare_data(stock, "1y")
 
     if df is None:
-        st.warning("Veri alınamadı veya yetersiz.")
+        st.warning("Veri alınamadı.")
     else:
 
-        score, decision, trend = generate_signal(df, rsi_buy, rsi_sell)
-        latest = df.iloc[-1]
+        market_trend = get_market_trend()
 
-        col1,col2,col3 = st.columns(3)
-        col1.metric("Karar", decision)
-        col2.metric("Trend", trend)
-        col3.metric("RSI", round(float(latest["RSI"]),2))
+        score, decision, explanation = generate_quant_score(df, market_trend)
+
+        stop_loss, trailing_stop, support_level, risk_score = risk_model(df)
+
+        col1,col2,col3,col4 = st.columns(4)
+
+        col1.metric("Quant Skor", score)
+        col2.metric("Karar", decision)
+        col3.metric("Risk", risk_score)
+        col4.metric("Piyasa", market_trend)
+
+        st.markdown("### Karar Açıklaması")
+        for e in explanation:
+            st.write("•", e)
+
+        st.markdown("### Risk Seviyeleri")
+        st.write(f"Stop Loss: {round(stop_loss,2)}")
+        st.write(f"Trailing Stop: {round(trailing_stop,2)}")
+        st.write(f"Destek: {round(support_level,2)}")
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df.index, y=df["Close"], name="Fiyat"))
@@ -213,92 +231,88 @@ with tab1:
 
 
 ###################################################
-# BACKTEST
+# BACKTEST (10 POINT MODEL BASED)
 ###################################################
 
 with tab2:
 
-    stock_bt = st.selectbox("Backtest Hisse", bist_list, key="bt")
+    stock_bt = st.selectbox("Backtest Hisse", bist_list)
 
-    df = prepare_data(stock_bt, period)
+    df = prepare_data(stock_bt, "2y")
 
     if df is None:
-        st.warning("Backtest için yeterli veri yok.")
+        st.warning("Backtest için veri yok.")
     else:
+
+        market_trend = get_market_trend()
 
         initial_capital = 100000
         capital = initial_capital
         position = 0
         equity = []
 
-        for i in range(200, len(df)):
+        for i in range(252, len(df)):
 
             sub = df.iloc[:i+1]
-            _, decision, _ = generate_signal(sub, rsi_buy, rsi_sell)
+            score, decision, _ = generate_quant_score(sub, market_trend)
 
             price = df["Close"].iloc[i]
 
-            if decision == "BUY" and position == 0:
+            if decision in ["STRONG BUY","BUY"] and position == 0:
                 position = capital / price
                 capital = 0
 
-            elif decision == "SELL" and position > 0:
+            elif decision in ["SELL","STRONG SELL"] and position > 0:
                 capital = position * price
                 position = 0
 
             current_value = capital if position==0 else position*price
             equity.append(current_value)
 
-        if len(equity) > 0:
+        equity_series = pd.Series(equity)
 
-            equity_series = pd.Series(equity)
+        total_return = (equity_series.iloc[-1]-initial_capital)/initial_capital*100
+        max_dd = ((equity_series/equity_series.cummax())-1).min()*100
+        sharpe = (equity_series.pct_change().mean()/equity_series.pct_change().std())*np.sqrt(252)
 
-            total_return = (equity_series.iloc[-1]-initial_capital)/initial_capital*100
-            max_drawdown = ((equity_series/equity_series.cummax())-1).min()*100
+        col1,col2,col3 = st.columns(3)
+        col1.metric("Toplam Getiri %", round(total_return,2))
+        col2.metric("Max Drawdown %", round(max_dd,2))
+        col3.metric("Sharpe Ratio", round(sharpe,2))
 
-            col1,col2 = st.columns(2)
-            col1.metric("Toplam Getiri %", round(total_return,2))
-            col2.metric("Max Drawdown %", round(max_drawdown,2))
-
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(y=equity_series,name="Equity"))
-            fig.update_layout(template="plotly_dark")
-            st.plotly_chart(fig,use_container_width=True)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(y=equity_series,name="Equity"))
+        fig.update_layout(template="plotly_dark")
+        st.plotly_chart(fig,use_container_width=True)
 
 
 ###################################################
-# SCREENER (SINIR YOK)
+# SCREENER (NEW MODEL)
 ###################################################
 
 with tab3:
 
     results = []
 
+    market_trend = get_market_trend()
+
     for stock in bist_list:
 
-        df = prepare_data(stock, period)
+        df = prepare_data(stock, "1y")
         if df is None:
             continue
 
-        score, decision, trend = generate_signal(df, rsi_buy, rsi_sell)
+        score, decision, _ = generate_quant_score(df, market_trend)
 
-        results.append([
-            stock,
-            score,
-            decision,
-            trend,
-            round(df["RSI"].iloc[-1],2)
-        ])
+        results.append([stock, score, decision])
 
     if results:
         screener_df = pd.DataFrame(
             results,
-            columns=["Hisse","Score","Karar","Trend","RSI"]
-        ).sort_values(by="Score",ascending=False)
+            columns=["Hisse","Quant Skor","Karar"]
+        ).sort_values(by="Quant Skor",ascending=False)
 
         st.dataframe(screener_df,use_container_width=True)
-    else:
-        st.info("Veri bulunamadı.")
 
 
 ###################################################
@@ -322,19 +336,10 @@ with tab4:
     for _, row in portfolio.iterrows():
 
         try:
-            symbol = str(row["Hisse"]).strip()
-            df = yf.download(symbol,period="5d",progress=False,threads=False)
-
-            if isinstance(df.columns,pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-
+            df = yf.download(row["Hisse"],period="5d",progress=False)
             price = float(df["Close"].iloc[-1])
-            adet = float(row["Adet"])
-            maliyet = float(row["Maliyet"])
-
-            total_value += price*adet
-            total_cost += maliyet*adet
-
+            total_value += price*row["Adet"]
+            total_cost += row["Maliyet"]*row["Adet"]
         except:
             continue
 
@@ -344,4 +349,3 @@ with tab4:
     col1.metric("Portföy Değeri",round(total_value,2))
     col2.metric("Toplam Maliyet",round(total_cost,2))
     col3.metric("Kar/Zarar %",round(pnl_pct,2))
-
