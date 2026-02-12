@@ -92,56 +92,64 @@ def get_market_trend():
 ###################################################
 
 def generate_quant_score(df, market_trend):
-    
-    latest = df.iloc[-1]
+
     score = 0
     explanation = []
 
-    if len(df) >= 20:
-        if latest["Close"] > df["Close"].iloc[-20]:
+    # Minimum veri kontrolü
+    if df is None or len(df) < 50:
+        return 0, "VERİ YETERSİZ", ["En az 50 mum gerekli"]
+
+    latest = df.iloc[-1]
+
+    # 1️⃣ EMA Trend
+    if "EMA20" in df.columns and "EMA50" in df.columns:
+        if latest["EMA20"] > latest["EMA50"]:
             score += 1
-            explanation.append("20 günlük yükseliş trendi")
+            explanation.append("EMA20 > EMA50 (pozitif trend)")
         else:
-            explanation.append("20 günlük düşüş trendi")
-    else:
-        explanation.append("Trend için yeterli veri yok")
+            explanation.append("EMA trend zayıf")
 
-    if latest["SMA50"] > latest["SMA200"]:
-        score += 2
-        explanation.append("Trend yukarı (SMA50 > SMA200)")
+    # 2️⃣ RSI
+    if "RSI" in df.columns:
+        if latest["RSI"] > 55:
+            score += 1
+            explanation.append("RSI güçlü")
+        elif latest["RSI"] < 40:
+            explanation.append("RSI zayıf")
 
-    if latest["Close"] > df["Close"].iloc[-20]:
-        score += 2
-        explanation.append("20 günlük momentum pozitif")
+    # 3️⃣ MACD
+    if "MACD" in df.columns and "MACD_signal" in df.columns:
+        if latest["MACD"] > latest["MACD_signal"]:
+            score += 1
+            explanation.append("MACD pozitif kesişim")
+        else:
+            explanation.append("MACD negatif")
 
-    if 40 < latest["RSI"] < 70:
-        score += 1
-        explanation.append("RSI sağlıklı bölgede")
+    # 4️⃣ 20 Günlük Momentum (GÜVENLİ)
+    if len(df) >= 20:
+        past_close = df["Close"].iloc[-20]
+        if latest["Close"] > past_close:
+            score += 1
+            explanation.append("20 günlük yükseliş momentumu")
+        else:
+            explanation.append("20 günlük momentum zayıf")
 
-    if latest["MACD"] > latest["MACD_signal"]:
-        score += 1
-        explanation.append("MACD pozitif")
+    # 5️⃣ Hacim
+    if "Volume" in df.columns:
+        avg_volume = df["Volume"].rolling(20).mean().iloc[-1]
+        if latest["Volume"] > avg_volume:
+            score += 1
+            explanation.append("Hacim ortalamanın üzerinde")
 
-    if latest["Volume"] > latest["Volume_MA"]:
-        score += 1
-        explanation.append("Hacim ortalamanın üstünde")
-
-    if latest["Volatility"] < 0.50:
-        score += 1
-        explanation.append("Volatilite kontrol altında")
-
-    if latest["Close"] > 0.85 * latest["52W_High"]:
-        score += 1
-        explanation.append("52W high'a yakın")
-
+    # 6️⃣ Market confirmation
     if market_trend == "UP":
         score += 1
-        explanation.append("Piyasa yönü destekliyor")
+        explanation.append("Piyasa trendi destekliyor")
     elif market_trend == "DOWN":
         explanation.append("Piyasa aşağı yönlü")
-    else:
-        explanation.append("Piyasa trendi alınamadı")
 
+    # 🎯 Karar Mekanizması
     if score >= 8:
         decision = "STRONG BUY"
     elif score >= 6:
@@ -376,6 +384,7 @@ with tab4:
     col1.metric("Portföy Değeri",round(total_value,2))
     col2.metric("Toplam Maliyet",round(total_cost,2))
     col3.metric("Kar/Zarar %",round(pnl_pct,2))
+
 
 
 
