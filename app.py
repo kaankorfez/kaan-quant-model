@@ -53,8 +53,8 @@ def get_market_data():
         "BIST100": "^XU100",
         "USDTRY": "USDTRY=X",
         "EURTRY": "EURTRY=X",
-        "Gram Altın": "GC=F",
-        "Gram Gümüş": "SI=F",
+        "Altın (Ons)": "GC=F",
+        "Gümüş (Ons)": "SI=F",
         "Brent": "BZ=F",
         "BTC": "BTC-USD"
     }
@@ -64,12 +64,23 @@ def get_market_data():
     for name, ticker in tickers.items():
         try:
             df = yf.download(ticker, period="5d", progress=False)
-            if df.empty:
+
+            if df is None or df.empty or len(df) < 2:
                 continue
-            last = df["Close"].iloc[-1]
-            prev = df["Close"].iloc[-2]
-            change = (last - prev) / prev * 100
-            results[name] = (round(last,2), round(change,2))
+
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+
+            last = float(df["Close"].iloc[-1])
+            prev = float(df["Close"].iloc[-2])
+
+            change = ((last - prev) / prev) * 100
+
+            results[name] = {
+                "price": round(last, 2),
+                "change": round(change, 2)
+            }
+
         except:
             continue
 
@@ -121,18 +132,13 @@ with st.sidebar:
     market = get_market_data()
 
     for k, v in market.items():
-        st.metric(k, v[0], f"{v[1]} %")
 
-    st.divider()
+        price = f"{v['price']:,}"
+        change = f"{v['change']} %"
 
-    st.header("Model Parametreleri")
+        st.metric(label=k, value=price, delta=change)
+        delta_color="inverse" if k in ["USDTRY","EURTRY"] else "normal"
 
-    rsi_buy = st.slider("RSI Al", 10, 50, 30)
-    rsi_sell = st.slider("RSI Sat", 50, 90, 70)
-
-    period = st.selectbox("Zaman Aralığı", ["6mo","1y","2y","3y"])
-
-    risk_mode = st.checkbox("Piyasa Risk Modu Aktif")
 
 ############################################
 # TABS
@@ -277,3 +283,4 @@ with tab4:
     fig2.add_trace(go.Scatter(y=growth, name="Portföy Büyüme"))
     fig2.update_layout(template="plotly_dark", title="Portföy Büyüme Grafiği")
     st.plotly_chart(fig2, use_container_width=True)
+
