@@ -14,10 +14,10 @@ st.title("🚀 Kaan Quant Trading Dashboard")
 
 def prepare_data(symbol, period="1y"):
 
-    # Symbol güvenlik filtresi
-    if symbol is None:
+    if not symbol:
         return None
 
+    # Liste gelirse ilk elemanı al
     if isinstance(symbol, (list, tuple, set)):
         if len(symbol) == 0:
             return None
@@ -29,21 +29,13 @@ def prepare_data(symbol, period="1y"):
         return None
 
     try:
-        df = yf.download(
-            tickers=symbol,
-            period=period,
-            auto_adjust=True,
-            progress=False,
-            threads=False
-        )
-    except:
+        ticker = yf.Ticker(symbol)
+        df = ticker.history(period=period, auto_adjust=True)
+    except Exception:
         return None
 
     if df is None or df.empty:
         return None
-
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
 
     if "Close" not in df.columns:
         return None
@@ -52,6 +44,7 @@ def prepare_data(symbol, period="1y"):
     df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
     df.dropna(subset=["Close"], inplace=True)
 
+    # SMA200 için minimum bar
     if len(df) < 200:
         return None
 
@@ -71,6 +64,7 @@ def prepare_data(symbol, period="1y"):
         return None
 
     return df
+
 
 
 ###################################################
@@ -350,3 +344,4 @@ with tab4:
     col1.metric("Portföy Değeri",round(total_value,2))
     col2.metric("Toplam Maliyet",round(total_cost,2))
     col3.metric("Kar/Zarar %",round(pnl_pct,2))
+
