@@ -16,27 +16,47 @@ def prepare_data(symbol, period="1y"):
 
     df = yf.download(symbol, period=period, auto_adjust=True, progress=False)
 
-    if df is None or df.empty or len(df) < 220:
+    if df is None or df.empty:
         return None
 
+    # MultiIndex düzeltme
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
+    # Close kolonu garanti altına al
     if "Close" not in df.columns:
         return None
 
     df = df.copy()
 
-    df["SMA50"] = df["Close"].rolling(50).mean()
-    df["SMA200"] = df["Close"].rolling(200).mean()
+    # Close'u kesin 1D Series yap
+    close = df["Close"]
 
-    df["RSI"] = ta.momentum.RSIIndicator(df["Close"]).rsi()
+    if isinstance(close, pd.DataFrame):
+        close = close.iloc[:, 0]
 
-    macd = ta.trend.MACD(df["Close"])
+    close = pd.Series(close.values.flatten(), index=df.index)
+
+    df["Close"] = close
+
+    # Yeterli veri kontrolü
+    if len(df) < 220:
+        return None
+
+    # Teknik indikatörler
+    df["SMA50"] = close.rolling(50).mean()
+    df["SMA200"] = close.rolling(200).mean()
+
+    df["RSI"] = ta.momentum.RSIIndicator(close).rsi()
+
+    macd = ta.trend.MACD(close)
     df["MACD"] = macd.macd()
     df["MACD_signal"] = macd.macd_signal()
 
-    df = df.dropna()
+    df.dropna(inplace=True)
+
+    if df.empty:
+        return None
 
     return df
 
@@ -365,4 +385,5 @@ with tab4:
         fig2.add_trace(go.Scatter(y=growth_series,name="Portföy Büyüme"))
         fig2.update_layout(template="plotly_dark", title="Portföy Büyüme Simülasyonu")
         st.plotly_chart(fig2, use_container_width=True)
+
 
