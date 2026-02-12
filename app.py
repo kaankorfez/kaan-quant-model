@@ -1,214 +1,226 @@
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
-import yfinance as yf
+import ta
 import plotly.graph_objects as go
 
 st.set_page_config(layout="wide")
+st.title("🚀 Kaan Quant Trading Dashboard")
 
-st.markdown("""
-<style>
-.metric-card {
-    padding:20px;
-    border-radius:15px;
-    background-color:#111;
-    box-shadow:0px 4px 15px rgba(0,0,0,0.4);
-}
-</style>
-""", unsafe_allow_html=True)
+############################
+# SIDEBAR
+############################
 
-st.title("📊 Kaan Quant Investment Panel")
+with st.sidebar:
+    st.header("Model Parametreleri")
+    rsi_buy = st.slider("RSI Al Eşiği", 10, 50, 30)
+    rsi_sell = st.slider("RSI Sat Eşiği", 50, 90, 70)
 
-# -----------------------
-# BIST100 SAMPLE LIST
-# -----------------------
-BIST100 = [
-"AEFES.IS","AGHOL.IS","AKBNK.IS","AKSA.IS","AKSEN.IS","ALARK.IS","ALTNY.IS","ANSGR.IS","ARCLK.IS","ASELS.IS",
-"ASTOR.IS","BALSU.IS","BIMAS.IS","BRSAN.IS","BRYAT.IS","BSOKE.IS","BTCIM.IS","CANTE.IS","CCOLA.IS","CIMSA.IS",
-"CWENE.IS","DAPGM.IS","DOAS.IS","DOHOL.IS","DSTKF.IS","ECILC.IS","EFOR.IS","EGEEN.IS","EKGYO.IS","ENERY.IS",
-"ENJSA.IS","ENKAI.IS","EREGL.IS","EUPWR.IS","FENER.IS","FROTO.IS","GARAN.IS","GENIL.IS","GESAN.IS","GLRMK.IS",
-"GRSEL.IS","GRTHO.IS","GSRAY.IS","GUBRF.IS","HALKB.IS","HEKTS.IS","ISCTR.IS","ISMEN.IS","IZENR.IS","KCAER.IS",
-"KCHOL.IS","KLRHO.IS","KONTR.IS","KRDMD.IS","KTLEV.IS","KUYAS.IS","MAGEN.IS","MAVI.IS","MGROS.IS","MIATK.IS",
-"MPARK.IS","OBAMS.IS","ODAS.IS","OTKAR.IS","OYAKC.IS","PASEU.IS","PATEK.IS","PETKM.IS","PGSUS.IS","QUAGR.IS",
-"RALYH.IS","REEDR.IS","SAHOL.IS","SASA.IS","SISE.IS","SKBNK.IS","SOKM.IS","TABGD.IS","TAVHL.IS","TCELL.IS",
-"THYAO.IS","TKFEN.IS","TOASO.IS","TRALT.IS","TRENJ.IS","TRMET.IS","TSKB.IS","TSPOR.IS","TTKOM.IS","TTRAK.IS",
-"TUKAS.IS","TUPRS.IS","TUREX.IS","TURSG.IS","ULKER.IS","VAKBN.IS","VESTL.IS","YEOTK.IS","YKBNK.IS","ZOREN.IS"
-]
-
-
-# -----------------------
+############################
 # DATA
-# -----------------------
-@st.cache_data
-def get_data(symbol):
-    df = yf.download(symbol, period="2y", interval="1d", progress=False)
+############################
+
+def prepare_data(stock, period="2y"):
+    df = yf.download(stock, period=period, auto_adjust=True, progress=False)
+
+    if df is None or df.empty or len(df) < 250:
+        return None
+
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    df = df[['Open','High','Low','Close','Volume']]
-    df.dropna(inplace=True)
+
+    df['SMA50'] = df['Close'].rolling(50).mean()
+    df['SMA200'] = df['Close'].rolling(200).mean()
+    df['RSI'] = ta.momentum.RSIIndicator(df['Close'], 14).rsi()
+
+    macd = ta.trend.MACD(df['Close'])
+    df['MACD'] = macd.macd()
+    df['MACD_signal'] = macd.macd_signal()
+
+    df = df.dropna()
+
     return df
 
-# -----------------------
-# INDICATORS
-# -----------------------
-def add_indicators(df):
-    df["SMA50"] = df["Close"].rolling(50).mean()
-    df["SMA200"] = df["Close"].rolling(200).mean()
-    df["RSI"] = compute_rsi(df["Close"],14)
-    df["ATR"] = compute_atr(df,14)
-    return df
+############################
+# SIGNAL
+############################
 
-def compute_rsi(series, period):
-    delta = series.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(period).mean()
-    avg_loss = loss.rolling(period).mean()
-    rs = avg_gain / avg_loss
-    return 100 - (100/(1+rs))
+def generate_signal(df):
+    latest = df.iloc[-1]
+    score = 0
 
-def compute_atr(df, period):
-    high_low = df['High'] - df['Low']
-    high_close = abs(df['High'] - df['Close'].shift())
-    low_close = abs(df['Low'] - df['Close'].shift())
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    true_range = ranges.max(axis=1)
-    return true_range.rolling(period).mean()
+    trend = "Downtrend"
+    if latest['SMA50'] > latest['SMA200']:
+        score += 1
+        trend = "Uptrend"
 
-# -----------------------
-# MARKET MODE
-# -----------------------
-def market_regime():
-    df = get_data("^XU100")
-    if df.empty:
-        return "Nötr",0.8
-    df = add_indicators(df)
-    if df["SMA50"].iloc[-1] > df["SMA200"].iloc[-1]:
-        return "Risk-On",1
-    elif df["SMA50"].iloc[-1] < df["SMA200"].iloc[-1]:
-        return "Risk-Off",0.6
+    if latest['RSI'] < rsi_buy:
+        score += 1
+    if latest['RSI'] > rsi_sell:
+        score -= 1
+
+    if latest['MACD'] > latest['MACD_signal']:
+        score += 1
     else:
-        return "Nötr",0.8
+        score -= 1
 
-# -----------------------
-# SCORE
-# -----------------------
-def generate_signal(df, regime_multiplier):
-    if len(df) < 200:
-        return 0,"Veri Yetersiz"
-    df = add_indicators(df)
-
-    trend = 25 if df["SMA50"].iloc[-1] > df["SMA200"].iloc[-1] else 5
-    momentum = 25 if 45 < df["RSI"].iloc[-1] < 70 else 10
-    volume = 25 if df["Volume"].iloc[-1] > df["Volume"].rolling(20).mean().iloc[-1] else 10
-    volatility = 25 if df["ATR"].iloc[-1] < df["Close"].iloc[-1]*0.05 else 10
-
-    score = (trend+momentum+volume+volatility)*regime_multiplier
-
-    if score>=70:
-        decision="AL"
-    elif score>=55:
-        decision="İZLE"
+    if score >= 2:
+        decision = "BUY"
+    elif score <= -1:
+        decision = "SELL"
     else:
-        decision="UZAK DUR"
+        decision = "WATCH"
 
-    return round(score,1),decision
+    return score, decision, trend
 
-# -----------------------
-# MENU
-# -----------------------
-menu = st.sidebar.radio("Menü",
-["Dashboard","Karar Motoru","Screener","Backtest","Portföyüm"])
-
-regime,regime_multiplier = market_regime()
-
-# -----------------------
-# DASHBOARD
-# -----------------------
-if menu=="Dashboard":
-
-    col1,col2,col3 = st.columns(3)
-    col1.metric("Piyasa Modu", regime)
-    col2.metric("Risk Çarpanı", regime_multiplier)
-
-    scores=[]
-    for s in BIST100:
-        df=get_data(s)
-        score,decision=generate_signal(df,regime_multiplier)
-        scores.append((s,score,decision))
-
-    df_scores=pd.DataFrame(scores,columns=["Hisse","Skor","Karar"])
-    df_scores=df_scores.sort_values("Skor",ascending=False)
-
-    st.subheader("🔥 En Güçlü 5")
-    st.dataframe(df_scores.head(),use_container_width=True)
-
-# -----------------------
-# KARAR MOTORU
-# -----------------------
-elif menu=="Karar Motoru":
-
-    symbol=st.selectbox("Hisse",BIST100)
-    df=get_data(symbol)
-
-    score,decision=generate_signal(df,regime_multiplier)
-
-    col1,col2=st.columns(2)
-    col1.metric("Skor",score)
-    col2.metric("Karar",decision)
-
-    st.markdown("### Olası Senaryolar")
-    st.write("Trend devam ederse pozisyon korunabilir.")
-    st.write("Düzeltmede destek bölgeleri izlenmeli.")
-    st.write("Trend kırılırsa risk azaltılmalı.")
-
-# -----------------------
-# SCREENER
-# -----------------------
-elif menu=="Screener":
-
-    results=[]
-    for s in BIST100:
-        df=get_data(s)
-        score,decision=generate_signal(df,regime_multiplier)
-        results.append((s,score,decision))
-
-    df_all=pd.DataFrame(results,columns=["Hisse","Skor","Karar"])
-    df_all=df_all.sort_values("Skor",ascending=False)
-
-    st.dataframe(df_all,use_container_width=True)
-
-# -----------------------
+############################
 # BACKTEST
-# -----------------------
-elif menu=="Backtest":
+############################
 
-    symbol=st.selectbox("Hisse",BIST100)
-    df=get_data(symbol)
-    df=add_indicators(df)
+def backtest(df):
 
-    df["Position"]=np.where(df["SMA50"]>df["SMA200"],1,0)
-    df["Return"]=df["Close"].pct_change()
-    df["Strategy"]=df["Position"].shift(1)*df["Return"]
+    capital = 100000
+    position = 0
+    equity = []
+    drawdown = []
+    trades = []
 
-    df["Cum_Strategy"]=(1+df["Strategy"]).cumprod()
-    df["Cum_Market"]=(1+df["Return"]).cumprod()
+    for i in range(200, len(df)):
 
-    fig=go.Figure()
-    fig.add_trace(go.Scatter(x=df.index,y=df["Cum_Strategy"],name="Strateji"))
-    fig.add_trace(go.Scatter(x=df.index,y=df["Cum_Market"],name="Pasif Tut"))
-    st.plotly_chart(fig,use_container_width=True)
+        sub = df.iloc[:i+1]
+        score, decision, _ = generate_signal(sub)
+        price = df['Close'].iloc[i]
 
-# -----------------------
-# PORTFÖY
-# -----------------------
-elif menu=="Portföyüm":
+        if decision == "BUY" and position == 0:
+            position = capital / price
+            entry = price
+            capital = 0
 
-    portfolio_input=st.text_area("Sembol,Adet,Alış Fiyatı")
-    start_value=st.number_input("Başlangıç Değeri",value=100000)
+        elif decision == "SELL" and position > 0:
+            capital = position * price
+            trades.append((price-entry)/entry)
+            position = 0
 
-    if portfolio_input:
+        current_equity = capital if position == 0 else position * price
+        equity.append(current_equity)
 
-        rows=portfolio_input.split("\n")
-        data=[]
-        total=0
+    equity_series = pd.Series(equity)
+    peak = equity_series.cummax()
+    dd = (equity_series / peak - 1) * 100
+
+    total_return = (equity_series.iloc[-1] - 100000) / 100000 * 100
+    win_rate = (np.array(trades) > 0).mean()*100 if trades else 0
+
+    return total_return, win_rate, equity_series, dd
+
+############################
+# BIST LIST
+############################
+
+def get_bist_list():
+    return ["THYAO.IS","ASELS.IS","GARAN.IS","BIMAS.IS","EREGL.IS",
+            "TUPRS.IS","SAHOL.IS","KCHOL.IS","AKBNK.IS","ISCTR.IS"]
+
+############################
+# TABS
+############################
+
+tab1, tab2, tab3 = st.tabs(["📊 Analiz", "📈 Backtest", "🔎 Screener"])
+
+############################
+# ANALIZ
+############################
+
+with tab1:
+    stock = st.text_input("Hisse Kodu")
+
+    if stock:
+        df = prepare_data(stock)
+
+        if df is None:
+            st.warning("Yeterli veri yok.")
+        else:
+            score, decision, trend = generate_signal(df)
+            latest = df.iloc[-1]
+
+            st.subheader("Model Kararı")
+            col1,col2,col3 = st.columns(3)
+            col1.metric("Karar", decision)
+            col2.metric("Trend", trend)
+            col3.metric("RSI", round(latest['RSI'],2))
+
+            st.write("Bu grafik fiyat ile birlikte 50 ve 200 günlük ortalamaları gösterir. Trend yönünü anlamak için kullanılır.")
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name="Fiyat"))
+            fig.add_trace(go.Scatter(x=df.index, y=df['SMA50'], name="SMA50"))
+            fig.add_trace(go.Scatter(x=df.index, y=df['SMA200'], name="SMA200"))
+            fig.update_layout(template="plotly_dark",
+                              title="Fiyat ve Trend Ortalamaları")
+            st.plotly_chart(fig, use_container_width=True)
+
+############################
+# BACKTEST
+############################
+
+with tab2:
+    stock_bt = st.text_input("Backtest Hisse", key="bt")
+
+    if stock_bt:
+        df = prepare_data(stock_bt, "3y")
+
+        if df is not None:
+            total_return, win_rate, equity, dd = backtest(df)
+
+            st.subheader("Strateji Performansı")
+            col1,col2 = st.columns(2)
+            col1.metric("Toplam Getiri %", round(total_return,2))
+            col2.metric("Win Rate %", round(win_rate,2))
+
+            st.write("Equity Curve: Stratejinin zaman içindeki portföy değerini gösterir.")
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(y=equity, name="Equity"))
+            fig.update_layout(template="plotly_dark",
+                              title="Equity Curve")
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.write("Drawdown: En yüksek noktadan yaşanan düşüş yüzdesi.")
+
+            fig2 = go.Figure()
+            fig2.add_trace(go.Scatter(y=dd, name="Drawdown"))
+            fig2.update_layout(template="plotly_dark",
+                               title="Drawdown (%)")
+            st.plotly_chart(fig2, use_container_width=True)
+
+############################
+# SCREENER
+############################
+
+with tab3:
+    st.subheader("BIST Trend & Momentum Tarama")
+
+    results = []
+
+    for symbol in get_bist_list():
+        df = prepare_data(symbol, "1y")
+        if df is None:
+            continue
+
+        score, decision, trend = generate_signal(df)
+        rsi = round(df['RSI'].iloc[-1],2)
+
+        results.append({
+            "Hisse": symbol,
+            "Skor": score,
+            "Karar": decision,
+            "Trend": trend,
+            "RSI": rsi
+        })
+
+    results_df = pd.DataFrame(results)
+    results_df = results_df.sort_values(by="Skor", ascending=False)
+
+    st.write("Tüm hisseler skorlarına göre sıralanır. En yüksek skor en güçlü teknik yapıyı gösterir.")
+    st.dataframe(results_df, use_container_width=True)
