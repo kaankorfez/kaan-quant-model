@@ -4,30 +4,32 @@ import pandas as pd
 import numpy as np
 import ta
 import plotly.graph_objects as go
-import requests
 
 st.set_page_config(layout="wide")
+st.title("📈 Kaan Quant Model")
 
-st.title("📈 Kaan Quant Trading Model")
-
-#################################################
-# MODEL SETTINGS
-#################################################
+###########################################
+# SETTINGS
+###########################################
 
 with st.sidebar:
-    st.header("⚙️ Model Ayarları")
-    rsi_buy = st.slider("RSI Al Alt Sınır", 10, 50, 30)
-    rsi_sell = st.slider("RSI Sat Üst Sınır", 50, 90, 70)
-    risk_ratio = st.slider("Risk / Ödül", 1.0, 4.0, 2.0)
+    st.header("Model Ayarları")
+    rsi_buy = st.slider("RSI Al", 10, 50, 30)
+    rsi_sell = st.slider("RSI Sat", 50, 90, 70)
+    risk_ratio = st.slider("Risk/Ödül", 1.0, 4.0, 2.0)
 
-#################################################
-# DATA
-#################################################
+###########################################
+# DATA PREP (SAFE VERSION)
+###########################################
 
 def prepare_data(stock, period="1y"):
-    df = yf.download(stock, period=period, auto_adjust=True)
 
-    if df.empty:
+    try:
+        df = yf.download(stock, period=period, auto_adjust=True, progress=False)
+    except:
+        return None
+
+    if df is None or df.empty:
         return None
 
     df = df.copy()
@@ -35,7 +37,12 @@ def prepare_data(stock, period="1y"):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    df = df[['Open','High','Low','Close','Volume']]
+    required_cols = ['Open','High','Low','Close','Volume']
+    if not all(col in df.columns for col in required_cols):
+        return None
+
+    if len(df) < 250:  # SMA200 için minimum veri
+        return None
 
     df['SMA50'] = df['Close'].rolling(50).mean()
     df['SMA200'] = df['Close'].rolling(200).mean()
@@ -45,13 +52,22 @@ def prepare_data(stock, period="1y"):
     df['MACD'] = macd.macd()
     df['MACD_signal'] = macd.macd_signal()
 
-    return df.dropna()
+    df = df.dropna()
 
-#################################################
-# SIGNAL
-#################################################
+    if df.empty:
+        return None
+
+    return df
+
+###########################################
+# SIGNAL SAFE
+###########################################
 
 def generate_signal(df):
+
+    if df is None or df.empty:
+        return None, None
+
     latest = df.iloc[-1]
     score = 0
 
@@ -69,35 +85,48 @@ def generate_signal(df):
         score -= 1
 
     if score >= 2:
-        return score, "BUY"
+        decision = "BUY"
     elif score <= -1:
-        return score, "SELL"
+        decision = "SELL"
     else:
-        return score, "WATCH"
+        decision = "WATCH"
 
-#################################################
-# RISK
-#################################################
+    return score, decision
+
+###########################################
+# RISK SAFE
+###########################################
 
 def calculate_risk(df):
+
+    if df is None or df.empty:
+        return None, None, None, None
+
     latest = df.iloc[-1]
     price = latest['Close']
 
-    atr = ta.volatility.AverageTrueRange(
+    atr_indicator = ta.volatility.AverageTrueRange(
         df['High'], df['Low'], df['Close']
-    ).average_true_range().iloc[-1]
+    )
+
+    atr = atr_indicator.average_true_range().iloc[-1]
 
     stop = price - atr
     target = price + (price - stop) * risk_ratio
+
     rr = (target - price) / (price - stop)
 
     return round(price,2), round(stop,2), round(target,2), round(rr,2)
 
-#################################################
-# BACKTEST
-#################################################
+###########################################
+# BACKTEST SAFE
+###########################################
 
 def backtest(df):
+
+    if df is None or len(df) < 250:
+        return None
+
     capital = 100000
     position = 0
 
@@ -105,6 +134,10 @@ def backtest(df):
 
         sub_df = df.iloc[:i+1]
         score, decision = generate_signal(sub_df)
+
+        if decision is None:
+            continue
+
         price = df['Close'].iloc[i]
 
         if decision == "BUY" and position == 0:
@@ -120,27 +153,26 @@ def backtest(df):
 
     return round(((capital-100000)/100000)*100,2)
 
-#################################################
-# BIST LIST (NO SCRAPING)
-#################################################
+###########################################
+# SIMPLE STABLE BIST LIST
+###########################################
 
 def get_bist_list():
-    # Stabil fallback liste (BIST 100 major hisseler)
     return [
         "THYAO.IS","ASELS.IS","GARAN.IS","ISCTR.IS","AKBNK.IS",
         "KCHOL.IS","SAHOL.IS","BIMAS.IS","EREGL.IS","TUPRS.IS",
         "YKBNK.IS","SISE.IS","PETKM.IS","PGSUS.IS","SASA.IS"
     ]
 
-#################################################
+###########################################
 # TABS
-#################################################
+###########################################
 
-tab1, tab2, tab3 = st.tabs(["📊 Analiz", "📈 Backtest", "🔎 BIST Screener"])
+tab1, tab2, tab3 = st.tabs(["Analiz", "Backtest", "Screener"])
 
-#################################################
-# ANALYSIS
-#################################################
+###########################################
+# TAB 1
+###########################################
 
 with tab1:
     stock = st.text_input("Hisse Kodu (örn: THYAO.IS)")
@@ -149,7 +181,7 @@ with tab1:
         df = prepare_data(stock)
 
         if df is None:
-            st.error("Veri alınamadı")
+            st.warning("Yeterli veri yok veya sembol hatalı.")
         else:
             score, decision = generate_signal(df)
             price, stop, target, rr = calculate_risk(df)
@@ -163,39 +195,34 @@ with tab1:
             st.write("Stop:", stop)
             st.write("Hedef:", target)
 
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='Close'))
-            fig.add_trace(go.Scatter(x=df.index, y=df['SMA50'], name='SMA50'))
-            fig.add_trace(go.Scatter(x=df.index, y=df['SMA200'], name='SMA200'))
-            st.plotly_chart(fig, use_container_width=True)
-
-#################################################
-# BACKTEST
-#################################################
+###########################################
+# TAB 2
+###########################################
 
 with tab2:
     stock_bt = st.text_input("Backtest Hisse", key="bt")
 
     if stock_bt:
         df = prepare_data(stock_bt, period="3y")
-        if df is not None:
-            result = backtest(df)
+        result = backtest(df)
+
+        if result is None:
+            st.warning("Backtest için yeterli veri yok.")
+        else:
             st.metric("Toplam Getiri %", result)
 
-#################################################
-# SCREENER
-#################################################
+###########################################
+# TAB 3
+###########################################
 
 with tab3:
-    st.write("Momentum Taraması")
-
     symbols = get_bist_list()
 
     buy_list = []
     sell_list = []
 
     for symbol in symbols:
-        df = prepare_data(symbol, period="6mo")
+        df = prepare_data(symbol, period="1y")
         if df is None:
             continue
 
@@ -203,6 +230,7 @@ with tab3:
 
         if decision == "BUY":
             buy_list.append(symbol)
+
         if decision == "SELL":
             sell_list.append(symbol)
 
