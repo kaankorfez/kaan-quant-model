@@ -142,8 +142,16 @@ with st.sidebar:
 ###################################################
 
 bist_list = [
-    "THYAO.IS","GARAN.IS","ASELS.IS","KCHOL.IS","SISE.IS",
-    "AKBNK.IS","BIMAS.IS","EREGL.IS","TUPRS.IS","ISCTR.IS"
+"AEFES.IS","AGHOL.IS","AKBNK.IS","AKSA.IS","AKSEN.IS","ALARK.IS","ALTNY.IS","ANSGR.IS","ARCLK.IS","ASELS.IS",
+"ASTOR.IS","BALSU.IS","BIMAS.IS","BRSAN.IS","BRYAT.IS","BSOKE.IS","BTCIM.IS","CANTE.IS","CCOLA.IS","CIMSA.IS",
+"CWENE.IS","DAPGM.IS","DOAS.IS","DOHOL.IS","DSTKF.IS","ECILC.IS","EFOR.IS","EGEEN.IS","EKGYO.IS","ENERY.IS",
+"ENJSA.IS","ENKAI.IS","EREGL.IS","EUPWR.IS","FENER.IS","FROTO.IS","GARAN.IS","GENIL.IS","GESAN.IS","GLRMK.IS",
+"GRSEL.IS","GRTHO.IS","GSRAY.IS","GUBRF.IS","HALKB.IS","HEKTS.IS","ISCTR.IS","ISMEN.IS","IZENR.IS","KCAER.IS",
+"KCHOL.IS","KLRHO.IS","KONTR.IS","KRDMD.IS","KTLEV.IS","KUYAS.IS","MAGEN.IS","MAVI.IS","MGROS.IS","MIATK.IS",
+"MPARK.IS","OBAMS.IS","ODAS.IS","OTKAR.IS","OYAKC.IS","PASEU.IS","PATEK.IS","PETKM.IS","PGSUS.IS","QUAGR.IS",
+"RALYH.IS","REEDR.IS","SAHOL.IS","SASA.IS","SISE.IS","SKBNK.IS","SOKM.IS","TABGD.IS","TAVHL.IS","TCELL.IS",
+"THYAO.IS","TKFEN.IS","TOASO.IS","TRALT.IS","TRENJ.IS","TRMET.IS","TSKB.IS","TSPOR.IS","TTKOM.IS","TTRAK.IS",
+"TUKAS.IS","TUPRS.IS","TUREX.IS","TURSG.IS","ULKER.IS","VAKBN.IS","VESTL.IS","YEOTK.IS","YKBNK.IS","ZOREN.IS"
 ]
 
 
@@ -202,40 +210,77 @@ with tab2:
 
     df = prepare_data(stock_bt, period)
 
-    if df is not None:
+    if df is None or len(df) < 250:
+        st.warning("Backtest için yeterli veri yok.")
+    else:
 
-        capital = 100000
+        initial_capital = 100000
+        capital = initial_capital
         position = 0
+
         equity = []
         equity_index = []
+        trades = []
 
-        for i in range(200,len(df)):
+        for i in range(1, len(df)):
 
             sub = df.iloc[:i+1]
             _, decision, _ = generate_signal(sub, rsi_buy, rsi_sell)
             price = df["Close"].iloc[i]
+            date = df.index[i]
 
+            # BUY
             if decision == "BUY" and position == 0:
                 position = capital / price
+                trades.append((date, "BUY", price))
                 capital = 0
 
+            # SELL
             elif decision == "SELL" and position > 0:
                 capital = position * price
+                trades.append((date, "SELL", price))
                 position = 0
 
-            current = capital if position==0 else position*price
-            equity.append(current)
-            equity_index.append(df.index[i])
+            current_value = capital if position == 0 else position * price
 
-        equity_series = pd.Series(equity,index=equity_index)
+            equity.append(current_value)
+            equity_index.append(date)
 
-        total_return = (equity_series.iloc[-1] - 100000)/100000*100
-        st.metric("Toplam Getiri %", round(total_return,2))
+        if len(equity) == 0:
+            st.warning("Strateji bu periyotta hiç işlem üretmedi.")
+        else:
 
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=equity_series.index,y=equity_series,name="Equity Curve"))
-        fig.update_layout(template="plotly_dark", title="Backtest Equity Curve")
-        st.plotly_chart(fig, use_container_width=True)
+            equity_series = pd.Series(equity, index=equity_index)
+
+            total_return = (equity_series.iloc[-1] - initial_capital) / initial_capital * 100
+
+            rolling_max = equity_series.cummax()
+            drawdown = (equity_series - rolling_max) / rolling_max
+            max_drawdown = drawdown.min() * 100
+
+            col1, col2 = st.columns(2)
+            col1.metric("Toplam Getiri %", round(total_return, 2))
+            col2.metric("Max Drawdown %", round(max_drawdown, 2))
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=equity_series.index,
+                y=equity_series,
+                name="Equity Curve"
+            ))
+            fig.update_layout(
+                template="plotly_dark",
+                title="Backtest Equity Curve",
+                xaxis_title="Tarih",
+                yaxis_title="Portföy Değeri"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            if trades:
+                trade_df = pd.DataFrame(trades, columns=["Tarih", "İşlem", "Fiyat"])
+                st.subheader("İşlem Geçmişi")
+                st.dataframe(trade_df)
+
 
 
 ###################################################
@@ -320,3 +365,4 @@ with tab4:
         fig2.add_trace(go.Scatter(y=growth_series,name="Portföy Büyüme"))
         fig2.update_layout(template="plotly_dark", title="Portföy Büyüme Simülasyonu")
         st.plotly_chart(fig2, use_container_width=True)
+
