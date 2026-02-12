@@ -125,13 +125,13 @@ def generate_quant_score(df, market_trend):
         score += 1
         explanation.append("52W high'a yakın")
 
-    if market_trend == "UP":
-    score += 1
-    explanation.append("Piyasa yönü destekliyor")
-elif market_trend == "DOWN":
-    explanation.append("Piyasa aşağı yönlü")
-else:
-    explanation.append("Piyasa trendi alınamadı")
+  if market_trend == "UP":
+        score += 1
+        explanation.append("Piyasa yönü destekliyor")
+    elif market_trend == "DOWN":
+        explanation.append("Piyasa aşağı yönlü")
+    else:
+        explanation.append("Piyasa trendi alınamadı")
 
     if score >= 8:
         decision = "STRONG BUY"
@@ -367,4 +367,5 @@ with tab4:
     col1.metric("Portföy Değeri",round(total_value,2))
     col2.metric("Toplam Maliyet",round(total_cost,2))
     col3.metric("Kar/Zarar %",round(pnl_pct,2))
+
 
